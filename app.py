@@ -8,6 +8,8 @@ from tensorflow import keras
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
+from PIL import Image
+import cnn_module
 
 load_dotenv()
 
@@ -35,9 +37,109 @@ with st.sidebar:
         ["Ganar masa muscular", "Perder grasa", "Mantener forma", "Fuerza"])
     nivel = st.selectbox("Nivel:", 
         ["Principiante", "Intermedio", "Avanzado"])
+    
+    # Detector de equipamiento con CNN
+    st.markdown("---")
+    st.subheader("Detectar Equipos")
+    
+    uploaded_files = st.file_uploader(
+        "Sube foto(s) de tu espacio de entrenamiento",
+        type=['jpg', 'jpeg', 'png'],
+        accept_multiple_files=True,
+        help="Puedes subir varias fotos para detectar más equipos"
+    )
+    
+    # Inicializar estado del análisis
+    if 'analisis_completo' not in st.session_state:
+        st.session_state.analisis_completo = False
+    
+    if uploaded_files:
+        # Botón para analizar
+        if st.button("Analizar todas las imágenes", key="analizar_todas"):
+            # Inicializar lista de equipos detectados
+            todos_equipos = []
+            todas_confianzas = {}
+            
+            with st.spinner("Analizando imágenes"):
+                for idx, uploaded_file in enumerate(uploaded_files):
+                    try:
+                        # Mostrar imagen
+                        image = Image.open(uploaded_file)
+                        
+                        # Analizar con CNN
+                        resultado = cnn_module.analizar_imagen(image)
+                        equipos_detectados = resultado['equipos']
+                        confianzas = resultado['confianzas']
+                        
+                        # Agregar a la lista total (sin duplicar)
+                        for eq in equipos_detectados:
+                            if eq not in todos_equipos:
+                                todos_equipos.append(eq)
+                                todas_confianzas[eq] = confianzas.get(eq, 0)
+                        
+                    except Exception as e:
+                        st.error(f"Error en foto {idx+1}: {e}")
+                
+                # Guardar resultados en session_state
+                if todos_equipos:
+                    equipos_para_agregar = cnn_module.equipos_a_lista(todos_equipos)
+                    st.session_state.equipos_sugeridos = equipos_para_agregar
+                    st.session_state.confianzas_detectadas = todas_confianzas
+                    st.session_state.analisis_completo = True
+                    st.rerun()
+        
+        # Mostrar preview de las fotos
+        if not st.session_state.analisis_completo:
+            st.write("**Vista previa:**")
+            cols = st.columns(min(len(uploaded_files), 3))
+            for idx, uploaded_file in enumerate(uploaded_files):
+                with cols[idx % 3]:
+                    image = Image.open(uploaded_file)
+                    st.image(image, caption=f"Foto {idx+1}", use_container_width=True)
+    
+    # Mostrar resultados si el análisis está completo
+    if st.session_state.analisis_completo and 'equipos_sugeridos' in st.session_state:
+        st.success("Análisis completado!")
+        
+        # Mostrar equipos detectados
+        st.write("**Equipos detectados:**")
+        for eq in st.session_state.equipos_sugeridos:
+            conf = st.session_state.confianzas_detectadas.get(eq, 0) * 100
+            st.write(f"- {eq}")
+        
+        st.info(f"{len(st.session_state.equipos_sugeridos)} equipos detectados")
+        
+        # Botones para agregar o ignorar (AHORA PERSISTEN)
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("➕ Agregar al selector", key="agregar_detectados_btn"):
+                # Inicializar si no existe
+                if 'equipos_seleccionados' not in st.session_state:
+                    st.session_state.equipos_seleccionados = []
+                
+                # Agregar equipos detectados
+                for eq in st.session_state.equipos_sugeridos:
+                    if eq not in st.session_state.equipos_seleccionados:
+                        st.session_state.equipos_seleccionados.append(eq)
+                
+                # Limpiar análisis
+                st.session_state.analisis_completo = False
+                st.session_state.equipos_sugeridos = []
+                
+                st.success("¡Equipos agregados!")
+                st.rerun()
+        
+        with col2:
+            if st.button("❌ Ignorar", key="ignorar_detectados_btn"):
+                st.session_state.analisis_completo = False
+                st.session_state.equipos_sugeridos = []
+                st.info("Análisis descartado")
+                st.rerun()
+    
     # Predictor automático de nivel con ML
     st.markdown("---")
-    with st.expander("Predicción automática de nivel (ML)"):
+    with st.expander("Predicción automática de nivel"):
         st.write("Responde estas preguntas y la IA predecirá tu nivel:")
         
         años = st.number_input("¿Cuántos años llevas entrenando?", 
@@ -55,7 +157,7 @@ with st.sidebar:
                                help="¿Tienes un programa de entrenamiento o vas sin plan?")
         sigue_rutina_val = 1 if sigue_rutina == "Sí, tengo un plan" else 0
         
-        if st.button("Predecir mi nivel", use_container_width=True):
+        if st.button("🔮 Predecir mi nivel", use_container_width=True):
             # Hacer predicción con nuevas features
             X = np.array([[años, dias, conocimiento, dominadas, sigue_rutina_val]])
             pred = clf_nivel.predict(X)[0]
@@ -70,10 +172,32 @@ with st.sidebar:
             # Actualizar la variable nivel
             nivel = nivel_predicho
             st.write(f"Usando nivel: **{nivel}** para generar rutina")
-
-    equipo = st.multiselect("Equipo disponible:",
+    
+    # Inicializar equipos seleccionados si no existe
+    if 'equipos_seleccionados' not in st.session_state:
+        st.session_state.equipos_seleccionados = []
+    
+    st.markdown("---")
+    
+    # Multiselect con equipos
+    equipo = st.multiselect(
+        "Equipo disponible:",
         ["Pesas", "Mancuernas", "Barra", "Bandas elásticas", 
-         "Máquinas", "Solo peso corporal"])
+         "Máquinas", "Solo peso corporal"],
+        default=st.session_state.equipos_seleccionados,
+        help="Selecciona manualmente o usa el detector de imágenes arriba"
+    )
+    
+    # Actualizar session_state
+    st.session_state.equipos_seleccionados = equipo
+    
+    # Mostrar sugerencias si existen
+    if 'equipos_sugeridos' in st.session_state and st.session_state.equipos_sugeridos:
+        equipos_faltantes = [eq for eq in st.session_state.equipos_sugeridos 
+                             if eq not in equipo]
+        if equipos_faltantes:
+            st.caption(f"💡 Detectados por CNN pero no agregados: {', '.join(equipos_faltantes)}")
+    
     tiempo = st.slider("Minutos por sesión:", 20, 120, 60)
     
     st.markdown("---")
@@ -143,7 +267,7 @@ if 'rutinas' in st.session_state and st.session_state.rutinas:
 
 # Predictor de Adherencia con LSTM
 st.markdown("---")
-st.subheader("📊 Predictor de Consistencia (LSTM)")
+st.subheader("Predictor de Consistencia (LSTM)")
 st.write("Marca los días que entrenaste esta semana y predeciremos tu adherencia:")
 
 col1, col2 = st.columns([2, 1])
